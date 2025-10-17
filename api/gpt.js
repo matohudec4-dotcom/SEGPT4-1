@@ -44,7 +44,7 @@ export default async function handler(req, res) {
   let decoded = raw || "";
   try { decoded = decodeURIComponent(decoded); } catch (e) {}
   try { decoded = decodeURIComponent(decoded); } catch (e) {}
-  decoded = decoded.replace(/\+/g, " "); // <— dôležité pre SE
+  decoded = decoded.replace(/\+/g, " "); // dôležité pre SE
 
   const prompt = (decoded || "")
     .toString()
@@ -52,6 +52,17 @@ export default async function handler(req, res) {
     .replace(/@\w+/g, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  // DEBUG režim: vráť, čo endpoint reálne dostal (bez volania OpenAI)
+  if (req.query && String(req.query.debug) === "1") {
+    return res.status(200).json({
+      ok: true,
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      rawReceived: raw,
+      decodedPrompt: prompt,
+      promptLength: prompt.length
+    });
+  }
 
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
@@ -66,21 +77,20 @@ export default async function handler(req, res) {
   const GAME = process.env.STREAM_GAME || "Twitch";
   const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
 
-  const isQuestion = /^[\s]*\?/.test(prompt) || /(prečo|ako|what|why|how)/i.test(prompt);
-  const temperature = isQuestion ? 0.3 : Number(process.env.TEMPERATURE || 1);
+  const isQuestion = /^[\s]*\?/.test(prompt) || /(prečo|ako|čo|what|why|how)/i.test(prompt);
+  const temperature = isQuestion ? 0.4 : Number(process.env.TEMPERATURE || 0.6);
 
   const systemPrompt = [
-  `Si Twitch chatbot na kanáli ${STREAMER}, ktorý odpovedá vecne, zrozumiteľne a v slovenčine.`,
-  `Používaj priateľský tón, ale vždy odpovedaj k veci.`,
-  `Maximálne ${MAX_CHARS} znakov.`,
-  "Ak sa ťa niekto niečo pýta, odpovedz jasne na otázku, aj keď je jednoduchá.",
-  "Ak otázka nedáva zmysel, odpovedz neutrálne, nie vtipom.",
-  "Ak ide o vedu, hry alebo bežné témy, odpovedz fakticky, ale krátko.",
-  "Vyhni sa slovám ako 'prepáč', 'nerozumiem', 'čo myslíš' – radšej sa pokús odhadnúť zámer.",
-  "Nezabudni – si pomocník v chate, nie filozof. Buď prirodzený a priamy."
-].join(" ");
+    `Si Twitch chatbot na kanáli ${STREAMER}, odpovedaj vecne a v slovenčine.`,
+    `Používaj ${TONE}. Max ${MAX_CHARS} znakov.`,
+    "Odpovedaj jasne a priamo (1–2 vety).",
+    "Ak otázka nedáva zmysel, odpovedz neutrálne bez filozofovania.",
+    "Pri vede/hrach bež fakticky a krátko.",
+    "Nezačínaj ospravedlnením a nepíš 'neviem čo myslíš'.",
+    `Kontext: hráme ${GAME}, komunita je priateľská.`
+  ].join(" ");
 
-      try {
+  try {
     // --- FAST payload: krátke odpovede pre SE ---
     const payload = {
       model: MODEL,
@@ -92,14 +102,14 @@ export default async function handler(req, res) {
 
     // GPT-5: nový názov + bez temperature; GPT-4: klasika
     if (MODEL.startsWith("gpt-5")) {
-      payload.max_completion_tokens = 60; // krátke = rýchle
-      // žiadne payload.temperature pre gpt-5
+      payload.max_completion_tokens = 60; // krátke = rýchle pre SE
+      // temperature sa pre gpt-5 neposiela (default je 1)
     } else {
       payload.max_tokens = 60;
       payload.temperature = temperature;
     }
 
-    // --- 850 ms timeout (SE býva prísne) ---
+    // --- 850 ms timeout (SE má prísny limit) ---
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 850);
 
@@ -113,7 +123,7 @@ export default async function handler(req, res) {
       signal: ctrl.signal
     }).finally(() => clearTimeout(t));
 
-    // Fallback pri abort/timeout
+    // Ak padne na chybe (401/429/…)
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
       const code = data?.error?.code || r.status;
@@ -121,16 +131,20 @@ export default async function handler(req, res) {
       return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
 
+    // OK → vráť odpoveď
     let out = (await r.json())?.choices?.[0]?.message?.content || "";
     out = (out.trim() || "Skús to prosím napísať kratšie (do 8 slov).");
     out = SAFE(out).slice(0, MAX_CHARS);
     return res.status(200).send(out);
 
   } catch (e) {
-    // Ak to nestihneme do času alebo sieť padne → ultra-rýchly fallback
-    const quick = prompt.toLowerCase().includes("ľadovc")
-      ? "Ľadovce sa topia kvôli otepľovaniu planéty a skleníkovým plynom."
-      : "Skús to prosím napísať kratšie (do 8 slov).";
+    // Timeout/sieť → ultra-rýchly faktický fallback
+    const p = (prompt || "").toLowerCase();
+    const quick =
+      /ľadovc|ladovc/.test(p)
+        ? "Ľadovce sa topia hlavne kvôli globálnemu otepľovaniu a skleníkovým plynom."
+        : "Skús to prosím napísať kratšie (do 8 slov).";
     return res.status(200).send(quick.slice(0, MAX_CHARS));
   }
 }
+
