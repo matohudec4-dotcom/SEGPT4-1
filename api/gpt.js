@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // -------- helpers --------
+  // ---- helpers ----
   function getUserText(req) {
     try {
       const q = req.query || {};
@@ -37,17 +37,21 @@ export default async function handler(req, res) {
     }
   }
 
-  // Bezpečné čítanie URL parametrov (debug/timeout)
+  // Bezpečné čítanie URL parametrov (debug/timeout/passthrough)
   let debug = false;
+  let passthrough = false;
   let timeoutOverride = null;
+  let urlObj = null;
   try {
-    const u = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    debug = u.searchParams.get("debug") === "1";
-    const t = u.searchParams.get("t");
+    urlObj = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const sp = urlObj.searchParams;
+    debug = sp.get("debug") === "1";
+    passthrough = sp.get("passthrough") === "1"; // debug + zavolaj OpenAI
+    const t = sp.get("t");
     if (t && /^\d+$/.test(t)) timeoutOverride = Number(t);
   } catch (_) {}
 
-  // -------- vstup a dekódovanie --------
+  // ---- vstup a dekódovanie ----
   let raw = getUserText(req);
 
   let decoded = raw || "";
@@ -62,8 +66,8 @@ export default async function handler(req, res) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // DEBUG: vráť čo endpoint číta (bez volania OpenAI)
-  if (debug && !(new URL(req.url, `http://${req.headers.host||"localhost"}`)).searchParams.get("inspect")) {
+  // DEBUG: ak nie je 'passthrough=1', vráť JSON okamžite (bez volania OpenAI)
+  if (debug && !passthrough) {
     return res.status(200).json({
       ok: true,
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
@@ -77,10 +81,10 @@ export default async function handler(req, res) {
     return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
   }
 
-  // -------- konfigurácia (GPT-4) --------
-  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"; // pevne GPT-4 rodina
+  // ---- konfigurácia (GPT-4) ----
+  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const LANG = process.env.BOT_LANG || "sk";
-  const MAX_CHARS = Number(process.env.MAX_CHARS || 120); // kratšie = rýchlejšie do SE
+  const MAX_CHARS = Number(process.env.MAX_CHARS || 120);
   const TONE = process.env.BOT_TONE || "priateľský, stručný, vecný";
   const STREAMER = process.env.STREAMER_NAME || "streamer";
   const GAME = process.env.STREAM_GAME || "Twitch";
@@ -107,12 +111,16 @@ export default async function handler(req, res) {
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
       ],
-      max_tokens: 40,         // krátke odpovede pre SE
-      temperature             // GPT-4 podporuje temperature
+      max_tokens: 40,
+      temperature
     };
 
-    // --- timeout: 850ms default (SE), override cez &t=... ---
-    const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 850);
+    // --- timeout: 850ms default (SE) / override / debug+passthrough dlhší ---
+    let TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 850);
+    if (debug && passthrough && !timeoutOverride) {
+      TIMEOUT_MS = 2500; // dlhší čas na manuálny test
+    }
+
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
@@ -128,8 +136,8 @@ export default async function handler(req, res) {
 
     const data = await resp.json().catch(() => ({}));
 
-    // INSPECT: surový OpenAI JSON (len pri debug=1&inspect=1)
-    if (debug && (new URL(req.url, `http://${req.headers.host||"localhost"}`)).searchParams.get("inspect") === "1") {
+    // DEBUG INSPECT: surový OpenAI JSON (len ak debug=1&inspect=1)
+    if (debug && urlObj && urlObj.searchParams.get("inspect") === "1") {
       return res.status(resp.status).json(data);
     }
 
@@ -154,15 +162,9 @@ export default async function handler(req, res) {
         .trim();
     }
 
-    if (!text && typeof first?.text === "string") {
-      text = first.text;
-    }
-    if (!text && typeof data?.output_text === "string") {
-      text = data.output_text;
-    }
-    if (!text || !text.trim()) {
-      text = "Skús otázku napísať konkrétnejšie (max 8 slov).";
-    }
+    if (!text && typeof first?.text === "string") text = first.text;
+    if (!text && typeof data?.output_text === "string") text = data.output_text;
+    if (!text || !text.trim()) text = "Skús otázku napísať konkrétnejšie (max 8 slov).";
 
     text = SAFE(text.trim()).slice(0, MAX_CHARS);
     return res.status(200).send(text);
