@@ -1,98 +1,79 @@
 export default async function handler(req, res) {
-  // ── 1) Vstup + dekódovanie z StreamElements ($(querystring)) ─────────────
-// 1) Ultra-odolné vytiahnutie textu z URL (SE/Nightbot/holý querystring)
-const getUserText = (req) => {
-  // Next.js štýl (req.query)
-  const q = req.query || {};
-  const keyOrder = ["prompt", "query", "text", "message", "msg", "q"];
+  // 1) Ultra-odolné vytiahnutie textu z URL (SE/Nightbot/holý querystring)
+  function getUserText(req) {
+    try {
+      const q = req.query || {};
+      const keys = ["prompt", "query", "text", "message", "msg", "q"];
 
-  // 1) Pomenované parametre
-  for (const k of keyOrder) {
-    if (typeof q[k] === "string" && q[k].trim()) return q[k];
-  }
+      // a) pomenované parametre
+      for (const k of keys) {
+        const v = q[k];
+        if (typeof v === "string" && v.trim()) return v;
+      }
 
-  // 2) Jediný „holý“ parameter: ?tvoj%20text (kľúč je vlastne text)
-  const keys = Object.keys(q);
-  if (keys.length === 1 && (q[keys[0]] === "" || typeof q[keys[0]] === "undefined")) {
-    return keys[0];
-  }
+      // b) holý querystring: ?tvoj%20text  (kľúč je vlastne text)
+      const qKeys = Object.keys(q);
+      if (qKeys.length === 1 && (q[qKeys[0]] === "" || typeof q[qKeys[0]] === "undefined")) {
+        return qKeys[0];
+      }
 
-  // 3) Fallback: rozparsuj URL manuálne
-  try {
-    const u = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    const sp = u.searchParams;
-
-    for (const k of keyOrder) {
-      const v = sp.get(k);
-      if (v && v.trim()) return v;
+      // c) fallback – manuálne cez URL
+      try {
+        const u = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const sp = u.searchParams;
+        for (const k of keys) {
+          const v = sp.get(k);
+          if (v && v.trim()) return v;
+        }
+        if ([...sp.keys()].length === 1) {
+          const onlyKey = [...sp.keys()][0];
+          const onlyVal = sp.get(onlyKey);
+          if (!onlyVal || !onlyVal.trim()) return onlyKey;
+        }
+      } catch (e) {
+        // ignore
+      }
+      return "";
+    } catch (e) {
+      return "";
     }
-    if ([...sp.keys()].length === 1) {
-      const onlyKey = [...sp.keys()][0];
-      const onlyVal = sp.get(onlyKey);
-      if (!onlyVal || !onlyVal.trim()) return onlyKey;
-    }
-  } catch (_) {}
-
-  return "";
-};
-
-let raw = getUserText(req);
-
-// Dvojité dekódovanie s ochranou (SE vie poslať double-encoded)
-let decoded = raw || "";
-try { decoded = decodeURIComponent(decoded); } catch (_) {}
-try { decoded = decodeURIComponent(decoded); } catch (_) {}
-
-const prompt = (decoded || "")
-  .toString()
-  .slice(0, 600)
-  .replace(/@\w+/g, "")
-  .replace(/\s+/g, " ")
-  .trim();
-
-if (!process.env.OPENAI_API_KEY) {
-  return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
-}
-
-
-    // nič – prázdny vstup
-    return "";
-  } catch {
-    return "";
   }
-};
 
-const raw = getUserText(req);
-const prompt = decodeURIComponent(raw).toString().slice(0, 600)
-  .replace(/@\w+/g, "")
-  .replace(/\s+/g, " ")
-  .trim();
+  let raw = getUserText(req);
 
-if (!process.env.OPENAI_API_KEY) {
-  return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
-}
+  // 2) Dvojité dekódovanie (SE niekedy posiela double-encoded)
+  let decoded = raw || "";
+  try { decoded = decodeURIComponent(decoded); } catch (e) {}
+  try { decoded = decodeURIComponent(decoded); } catch (e) {}
 
+  const prompt = (decoded || "")
+    .toString()
+    .slice(0, 600)
+    .replace(/@\w+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  // ── 2) Konfig cez ENV (ľahké doladenie bez úpravy kódu) ──────────────────
-  const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
+  }
+
+  // 3) Konfigurácia
+  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const LANG = process.env.BOT_LANG || "sk";
-  const MAX_CHARS = Number(process.env.MAX_CHARS || 350);
+  const MAX_CHARS = Number(process.env.MAX_CHARS || 180);
   const TONE = process.env.BOT_TONE || "vtipný, priateľský, stručný";
-  const STREAMER = process.env.STREAMER_NAME || "Sokrat";
+  const STREAMER = process.env.STREAMER_NAME || "streamer";
   const GAME = process.env.STREAM_GAME || "Twitch";
-  const SAFE = (s) =>
-    s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
+  const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
 
   const isQuestion = /^[\s]*\?/.test(prompt) || /(prečo|ako|what|why|how)/i.test(prompt);
   const temperature = isQuestion ? 0.3 : Number(process.env.TEMPERATURE || 0.5);
 
-  // ── 3) Persona pre chat (system prompt) ──────────────────────────────────
   const systemPrompt = [
     `Si Twitch co-host bota kanála ${STREAMER}.`,
     `Hovor jazykom: ${LANG}. Buď ${TONE}. Max ${MAX_CHARS} znakov.`,
-    "Buď stručný (1–2 vety), bez odsekov, bez #, bez @mention.",
-    "Ak sa pýtajú na pravidlá alebo info o streame, odpovedz stručne a pomocne.",
-    "Keď niečo nevieš, povedz to priamo. Žiadne vymýšľanie faktov.",
+    "Buď stručný (1–2 vety), bez odsekov, bez # a bez @mention.",
+    "Ak niečo nevieš, povedz to priamo. Žiadne vymýšľanie faktov.",
     "Ak je dopyt toxický/NSFW/spam, zdvorilo odmietni a navrhni inú tému.",
     `Kontext: hráme ${GAME}, komunita je priateľská.`
   ].join(" ");
@@ -117,13 +98,13 @@ if (!process.env.OPENAI_API_KEY) {
 
     const data = await r.json();
     if (!r.ok) {
-      const code = data?.error?.code || r.status;
-      const msg = data?.error?.message || "Neznáma chyba OpenAI.";
+      const code = (data && data.error && data.error.code) ? data.error.code : r.status;
+      const msg  = (data && data.error && data.error.message) ? data.error.message : "Neznáma chyba OpenAI.";
       return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
 
-    let out = (data?.choices?.[0]?.message?.content || "").trim();
-    if (!out) out = "Hmm, skús to inak. 🙂";
+    let out = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+    out = (out.trim() || "Hmm, skús to inak. 🙂");
     out = SAFE(out).slice(0, MAX_CHARS);
     return res.status(200).send(out);
   } catch (e) {
