@@ -1,18 +1,43 @@
 export default async function handler(req, res) {
   // ── 1) Vstup + dekódovanie z StreamElements ($(querystring)) ─────────────
-  const queryKeys = Object.keys(req.query);
-const raw =
-  queryKeys.length === 1 && !req.query.prompt
-    ? queryKeys[0] // ak SE pošle len ?text
-    : req.query.prompt || "";
+ // 1) Zober text zo všetkých bežných kľúčov + fallback na „holý“ querystring
+const getUserText = (req) => {
+  try {
+    // plná URL kvôli searchParams
+    const u = new URL(req.url, `http://${req.headers.host}`);
+    const sp = u.searchParams;
 
+    // bežné názvy v StreamElements/Nightbot
+    const candidates = ["prompt", "query", "text", "message", "msg", "q"];
+    for (const k of candidates) {
+      const v = sp.get(k);
+      if (v && v.trim()) return v;
+    }
+
+    // ak prišiel „holý“ querystring: ?tvoj%20text (bez názvu)
+    if ([...sp.keys()].length === 1) {
+      const onlyKey = [...sp.keys()][0];
+      const onlyVal = sp.get(onlyKey);
+      if (!onlyVal || !onlyVal.trim()) return onlyKey; // kľúč je vlastne text
+    }
+
+    // nič – prázdny vstup
+    return "";
+  } catch {
+    return "";
+  }
+};
+
+const raw = getUserText(req);
 const prompt = decodeURIComponent(raw).toString().slice(0, 600)
   .replace(/@\w+/g, "")
   .replace(/\s+/g, " ")
   .trim();
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
-  }
+
+if (!process.env.OPENAI_API_KEY) {
+  return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
+}
+
 
   // ── 2) Konfig cez ENV (ľahké doladenie bez úpravy kódu) ──────────────────
   const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
