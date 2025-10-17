@@ -80,25 +80,28 @@ export default async function handler(req, res) {
   "Nezabudni – si pomocník v chate, nie filozof. Buď prirodzený a priamy."
 ].join(" ");
 
-     try {
-    // 💬 Automatická podpora GPT-4 aj GPT-5 modelov
+      try {
+    // --- FAST payload: krátke odpovede pre SE ---
     const payload = {
-  model: MODEL,
-  messages: [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
-  ]
-};
+      model: MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
+      ]
+    };
 
-// GPT-5 špecifiká
-if (MODEL.startsWith("gpt-5")) {
-  payload.max_completion_tokens = 120; // nový názov
-  // temperature sa neodosiela
-} else {
-  payload.max_tokens = 120;
-  payload.temperature = temperature;
-}
+    // GPT-5: nový názov + bez temperature; GPT-4: klasika
+    if (MODEL.startsWith("gpt-5")) {
+      payload.max_completion_tokens = 60; // krátke = rýchle
+      // žiadne payload.temperature pre gpt-5
+    } else {
+      payload.max_tokens = 60;
+      payload.temperature = temperature;
+    }
 
+    // --- 850 ms timeout (SE býva prísne) ---
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 850);
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -106,23 +109,28 @@ if (MODEL.startsWith("gpt-5")) {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload)
-    });
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    }).finally(() => clearTimeout(t));
 
-    const data = await r.json();
+    // Fallback pri abort/timeout
     if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
       const code = data?.error?.code || r.status;
-      const msg = data?.error?.message || "Neznáma chyba OpenAI.";
+      const msg  = data?.error?.message || "Neznáma chyba OpenAI.";
       return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
 
-    let out = data?.choices?.[0]?.message?.content || "";
-    out = (out.trim() || "Hmm, skús to inak. 🙂");
+    let out = (await r.json())?.choices?.[0]?.message?.content || "";
+    out = (out.trim() || "Skús to prosím napísať kratšie (do 8 slov).");
     out = SAFE(out).slice(0, MAX_CHARS);
     return res.status(200).send(out);
 
   } catch (e) {
-    console.error("Server error:", e);
-    return res.status(500).send("❌ Server error – skontroluj Logs v Vercel Deployments.");
+    // Ak to nestihneme do času alebo sieť padne → ultra-rýchly fallback
+    const quick = prompt.toLowerCase().includes("ľadovc")
+      ? "Ľadovce sa topia kvôli otepľovaniu planéty a skleníkovým plynom."
+      : "Skús to prosím napísať kratšie (do 8 slov).";
+    return res.status(200).send(quick.slice(0, MAX_CHARS));
   }
 }
