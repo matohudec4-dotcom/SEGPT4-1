@@ -31,14 +31,13 @@ export default async function handler(req, res) {
           if (!onlyVal || !onlyVal.trim()) return onlyKey;
         }
       } catch (_) {}
-
       return "";
     } catch (_) {
       return "";
     }
   }
 
-  // Bezpečné čítanie URL parametrov (pre debug/timeout)
+  // Bezpečné čítanie URL parametrov (debug/timeout)
   let debug = false;
   let timeoutOverride = null;
   try {
@@ -63,8 +62,8 @@ export default async function handler(req, res) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // DEBUG: vždy funguje (aj keď req.query je prázdne)
-  if (debug) {
+  // DEBUG: vráť čo endpoint číta (bez volania OpenAI)
+  if (debug && !(new URL(req.url, `http://${req.headers.host||"localhost"}`)).searchParams.get("inspect")) {
     return res.status(200).json({
       ok: true,
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
@@ -78,11 +77,11 @@ export default async function handler(req, res) {
     return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
   }
 
-  // -------- konfigurácia --------
-  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  // -------- konfigurácia (GPT-4) --------
+  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"; // pevne GPT-4 rodina
   const LANG = process.env.BOT_LANG || "sk";
-  const MAX_CHARS = Number(process.env.MAX_CHARS || 180);
-  const TONE = process.env.BOT_TONE || "vtipný, priateľský, stručný";
+  const MAX_CHARS = Number(process.env.MAX_CHARS || 120); // kratšie = rýchlejšie do SE
+  const TONE = process.env.BOT_TONE || "priateľský, stručný, vecný";
   const STREAMER = process.env.STREAMER_NAME || "streamer";
   const GAME = process.env.STREAM_GAME || "Twitch";
   const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
@@ -94,39 +93,30 @@ export default async function handler(req, res) {
     `Si Twitch chatbot na kanáli ${STREAMER}, odpovedaj vecne a v slovenčine.`,
     `Používaj ${TONE}. Max ${MAX_CHARS} znakov.`,
     "Odpovedaj jasne a priamo (1–2 vety).",
-    "Ak otázka nedáva zmysel, odpovedz neutrálne bez filozofovania.",
-    "Pri vede/hrach buď faktický a krátky.",
-    "Nezačínaj ospravedlnením a nepiš 'neviem čo myslíš'.",
+    "Ak otázka nedáva zmysel, odpovedz neutrálne a krátko.",
+    "Pri vede/hrach buď faktický a stručný.",
+    "Nezačínaj ospravedlnením, vyhni sa 'neviem čo myslíš'.",
     `Kontext: hráme ${GAME}, komunita je priateľská.`
   ].join(" ");
 
   try {
-    // --- payload (GPT-4 vs GPT-5) ---
+    // --- payload pre GPT-4 (klasické parametre) ---
     const payload = {
       model: MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
-      ]
+      ],
+      max_tokens: 40,         // krátke odpovede pre SE
+      temperature             // GPT-4 podporuje temperature
     };
 
-    if (MODEL.startsWith("gpt-5")) {
-      payload.max_completion_tokens = 60; // krátke = rýchle pre SE
-      // GPT-5: neodosielame temperature (default je 1)
-    } else {
-      payload.max_tokens = 60;
-      payload.temperature = temperature;
-    }
-
-    // --- timeout: kratší pre SE, dlhší pre manuálny test ---
-    const TIMEOUT_MS = Number(
-      timeoutOverride ?? process.env.TIMEOUT_MS ?? 850
-    );
-
+    // --- timeout: 850ms default (SE), override cez &t=... ---
+    const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 850);
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -136,20 +126,49 @@ export default async function handler(req, res) {
       signal: ctrl.signal
     }).finally(() => clearTimeout(t));
 
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      const code = data?.error?.code || r.status;
+    const data = await resp.json().catch(() => ({}));
+
+    // INSPECT: surový OpenAI JSON (len pri debug=1&inspect=1)
+    if (debug && (new URL(req.url, `http://${req.headers.host||"localhost"}`)).searchParams.get("inspect") === "1") {
+      return res.status(resp.status).json(data);
+    }
+
+    if (!resp.ok) {
+      const code = data?.error?.code || resp.status;
       const msg  = data?.error?.message || "Neznáma chyba OpenAI.";
       return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
 
-    let out = (await r.json())?.choices?.[0]?.message?.content || "";
-    out = (out.trim() || "Skús to prosím napísať kratšie (do 8 slov).");
-    out = SAFE(out).slice(0, MAX_CHARS);
-    return res.status(200).send(out);
+    // robustný extraktor textu
+    const first = Array.isArray(data?.choices) ? data.choices[0] : null;
+    let text =
+      first?.message?.content && typeof first.message.content === "string"
+        ? first.message.content
+        : "";
+
+    if (!text && Array.isArray(first?.message?.content)) {
+      text = first.message.content
+        .map(part => (typeof part?.text === "string" ? part.text : (typeof part === "string" ? part : "")))
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+    }
+
+    if (!text && typeof first?.text === "string") {
+      text = first.text;
+    }
+    if (!text && typeof data?.output_text === "string") {
+      text = data.output_text;
+    }
+    if (!text || !text.trim()) {
+      text = "Skús otázku napísať konkrétnejšie (max 8 slov).";
+    }
+
+    text = SAFE(text.trim()).slice(0, MAX_CHARS);
+    return res.status(200).send(text);
 
   } catch (_) {
-    // Timeout/sieť → ultra-rýchly faktický fallback
+    // Timeout/sieť → krátky faktický fallback
     const p = (prompt || "").toLowerCase();
     const quick =
       /ľadovc|ladovc/.test(p)
