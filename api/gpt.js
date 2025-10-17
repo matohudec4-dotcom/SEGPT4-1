@@ -80,22 +80,31 @@ export default async function handler(req, res) {
   "Nezabudni – si pomocník v chate, nie filozof. Buď prirodzený a priamy."
 ].join(" ");
 
-  try {
+    try {
+    // 💬 Dynamická podpora GPT-4 aj GPT-5
+    const payload = {
+      model: MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
+      ],
+      temperature
+    };
+
+    // GPT-5 používa nový parameter
+    if (MODEL.startsWith("gpt-5")) {
+      payload.max_completion_tokens = 120;
+    } else {
+      payload.max_tokens = 120;
+    }
+
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
-        ],
-        max_tokens: 120,
-        temperature
-      })
+      body: JSON.stringify(payload)
     });
 
     const data = await r.json();
