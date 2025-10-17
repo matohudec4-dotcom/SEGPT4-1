@@ -80,8 +80,8 @@ export default async function handler(req, res) {
   "Nezabudni – si pomocník v chate, nie filozof. Buď prirodzený a priamy."
 ].join(" ");
 
-    try {
-    // 💬 Dynamická podpora GPT-4 aj GPT-5
+     try {
+    // 💬 Automatická podpora GPT-4 aj GPT-5 modelov
     const payload = {
       model: MODEL,
       messages: [
@@ -91,7 +91,7 @@ export default async function handler(req, res) {
       temperature
     };
 
-    // GPT-5 používa nový parameter
+    // 👉 GPT-5 (a novšie modely) používajú parameter max_completion_tokens
     if (MODEL.startsWith("gpt-5")) {
       payload.max_completion_tokens = 120;
     } else {
@@ -109,16 +109,18 @@ export default async function handler(req, res) {
 
     const data = await r.json();
     if (!r.ok) {
-      const code = (data && data.error && data.error.code) ? data.error.code : r.status;
-      const msg  = (data && data.error && data.error.message) ? data.error.message : "Neznáma chyba OpenAI.";
+      const code = data?.error?.code || r.status;
+      const msg = data?.error?.message || "Neznáma chyba OpenAI.";
       return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
 
-    let out = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+    let out = data?.choices?.[0]?.message?.content || "";
     out = (out.trim() || "Hmm, skús to inak. 🙂");
     out = SAFE(out).slice(0, MAX_CHARS);
     return res.status(200).send(out);
+
   } catch (e) {
+    console.error("Server error:", e);
     return res.status(500).send("❌ Server error – skontroluj Logs v Vercel Deployments.");
   }
 }
