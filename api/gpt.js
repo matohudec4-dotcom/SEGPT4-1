@@ -67,7 +67,7 @@ export default async function handler(req, res) {
   const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
 
   const isQuestion = /^[\s]*\?/.test(prompt) || /(prečo|ako|what|why|how)/i.test(prompt);
-  const temperature = isQuestion ? 0.3 : Number(process.env.TEMPERATURE || 0.5);
+  const temperature = isQuestion ? 0.3 : Number(process.env.TEMPERATURE || 1);
 
   const systemPrompt = [
   `Si Twitch chatbot na kanáli ${STREAMER}, ktorý odpovedá vecne, zrozumiteľne a v slovenčine.`,
