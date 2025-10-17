@@ -1,17 +1,25 @@
 export default async function handler(req, res) {
   // ── 1) Vstup + dekódovanie z StreamElements ($(querystring)) ─────────────
-  const raw = decodeURIComponent(req.query.prompt || "").toString().slice(0, 600);
-  const prompt = raw.replace(/@\w+/g, "").replace(/\s+/g, " ").trim();
+  const queryKeys = Object.keys(req.query);
+const raw =
+  queryKeys.length === 1 && !req.query.prompt
+    ? queryKeys[0] // ak SE pošle len ?text
+    : req.query.prompt || "";
+
+const prompt = decodeURIComponent(raw).toString().slice(0, 600)
+  .replace(/@\w+/g, "")
+  .replace(/\s+/g, " ")
+  .trim();
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
   }
 
   // ── 2) Konfig cez ENV (ľahké doladenie bez úpravy kódu) ──────────────────
-  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
   const LANG = process.env.BOT_LANG || "sk";
-  const MAX_CHARS = Number(process.env.MAX_CHARS || 180);
+  const MAX_CHARS = Number(process.env.MAX_CHARS || 350);
   const TONE = process.env.BOT_TONE || "vtipný, priateľský, stručný";
-  const STREAMER = process.env.STREAMER_NAME || "streamer";
+  const STREAMER = process.env.STREAMER_NAME || "Sokrat";
   const GAME = process.env.STREAM_GAME || "Twitch";
   const SAFE = (s) =>
     s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
