@@ -1,11 +1,28 @@
 export default async function handler(req, res) {
   // ── 1) Vstup + dekódovanie z StreamElements ($(querystring)) ─────────────
+// 1) Ultra-odolné vytiahnutie textu z URL (SE/Nightbot/holý querystring)
 const getUserText = (req) => {
+  // Next.js štýl (req.query)
+  const q = req.query || {};
+  const keyOrder = ["prompt", "query", "text", "message", "msg", "q"];
+
+  // 1) Pomenované parametre
+  for (const k of keyOrder) {
+    if (typeof q[k] === "string" && q[k].trim()) return q[k];
+  }
+
+  // 2) Jediný „holý“ parameter: ?tvoj%20text (kľúč je vlastne text)
+  const keys = Object.keys(q);
+  if (keys.length === 1 && (q[keys[0]] === "" || typeof q[keys[0]] === "undefined")) {
+    return keys[0];
+  }
+
+  // 3) Fallback: rozparsuj URL manuálne
   try {
-    const u = new URL(req.url, `http://${req.headers.host}`);
+    const u = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const sp = u.searchParams;
-    const candidates = ["prompt", "query", "text", "message", "msg", "q"];
-    for (const k of candidates) {
+
+    for (const k of keyOrder) {
       const v = sp.get(k);
       if (v && v.trim()) return v;
     }
@@ -14,17 +31,21 @@ const getUserText = (req) => {
       const onlyVal = sp.get(onlyKey);
       if (!onlyVal || !onlyVal.trim()) return onlyKey;
     }
-    return "";
-  } catch {
-    return "";
-  }
+  } catch (_) {}
+
+  return "";
 };
 
-const raw = getUserText(req);
+let raw = getUserText(req);
 
-// 🟢 dvojité dekódovanie kvôli StreamElements
-const decoded = decodeURIComponent(decodeURIComponent(raw || ""));
-const prompt = decoded.toString().slice(0, 600)
+// Dvojité dekódovanie s ochranou (SE vie poslať double-encoded)
+let decoded = raw || "";
+try { decoded = decodeURIComponent(decoded); } catch (_) {}
+try { decoded = decodeURIComponent(decoded); } catch (_) {}
+
+const prompt = (decoded || "")
+  .toString()
+  .slice(0, 600)
   .replace(/@\w+/g, "")
   .replace(/\s+/g, " ")
   .trim();
