@@ -109,19 +109,22 @@ export default async function handler(req, res) {
       payload.temperature = temperature;
     }
 
-    // --- 850 ms timeout (SE má prísny limit) ---
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 850);
+    // --- nastaviteľný timeout: dlhší pri debugu, kratší pre SE ---
+const TIMEOUT_MS = Number(
+  process.env.TIMEOUT_MS || (req.query && String(req.query.debug) === "1" ? 2500 : 850)
+);
+const ctrl = new AbortController();
+const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal
-    }).finally(() => clearTimeout(t));
+const r = await fetch("https://api.openai.com/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify(payload),
+  signal: ctrl.signal
+}).finally(() => clearTimeout(t));
 
     // Ak padne na chybe (401/429/…)
     if (!r.ok) {
