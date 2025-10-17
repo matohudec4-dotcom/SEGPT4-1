@@ -190,7 +190,7 @@ export default async function handler(req, res) {
         { role: "system", content: systemForUse },
         { role: "user", content: userContent }
       ],
-      max_tokens: autoMode ? 30 : 40, // auto-nudge ešte kratšie a rýchle
+      max_tokens: autoMode ? 120 : 140, // auto-nudge ešte kratšie a rýchle
       temperature
     };
 
