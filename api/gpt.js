@@ -30,9 +30,8 @@ export default async function handler(req, res) {
           const onlyVal = sp.get(onlyKey);
           if (!onlyVal || !onlyVal.trim()) return onlyKey;
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) { /* ignore */ }
+
       return "";
     } catch (e) {
       return "";
@@ -41,10 +40,11 @@ export default async function handler(req, res) {
 
   let raw = getUserText(req);
 
-  // 2) Dvojité dekódovanie (SE niekedy posiela double-encoded)
+  // 2) Dvojité dekódovanie (SE vie poslať double-encoded) + fix na '+'
   let decoded = raw || "";
   try { decoded = decodeURIComponent(decoded); } catch (e) {}
   try { decoded = decodeURIComponent(decoded); } catch (e) {}
+  decoded = decoded.replace(/\+/g, " "); // <— dôležité pre SE
 
   const prompt = (decoded || "")
     .toString()
