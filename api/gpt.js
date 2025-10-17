@@ -1,25 +1,38 @@
 export default async function handler(req, res) {
   // ── 1) Vstup + dekódovanie z StreamElements ($(querystring)) ─────────────
- // 1) Zober text zo všetkých bežných kľúčov + fallback na „holý“ querystring
 const getUserText = (req) => {
   try {
-    // plná URL kvôli searchParams
     const u = new URL(req.url, `http://${req.headers.host}`);
     const sp = u.searchParams;
-
-    // bežné názvy v StreamElements/Nightbot
     const candidates = ["prompt", "query", "text", "message", "msg", "q"];
     for (const k of candidates) {
       const v = sp.get(k);
       if (v && v.trim()) return v;
     }
-
-    // ak prišiel „holý“ querystring: ?tvoj%20text (bez názvu)
     if ([...sp.keys()].length === 1) {
       const onlyKey = [...sp.keys()][0];
       const onlyVal = sp.get(onlyKey);
-      if (!onlyVal || !onlyVal.trim()) return onlyKey; // kľúč je vlastne text
+      if (!onlyVal || !onlyVal.trim()) return onlyKey;
     }
+    return "";
+  } catch {
+    return "";
+  }
+};
+
+const raw = getUserText(req);
+
+// 🟢 dvojité dekódovanie kvôli StreamElements
+const decoded = decodeURIComponent(decodeURIComponent(raw || ""));
+const prompt = decoded.toString().slice(0, 600)
+  .replace(/@\w+/g, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+if (!process.env.OPENAI_API_KEY) {
+  return res.status(500).send("❌ OPENAI_API_KEY chýba vo Vercel → Settings → Environment Variables.");
+}
+
 
     // nič – prázdny vstup
     return "";
