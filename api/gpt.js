@@ -111,7 +111,7 @@ export default async function handler(req, res) {
   // ---- konfigurácia (GPT-4) ----
   const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const MAX_CHARS = Number(process.env.MAX_CHARS || 300);
-  const TONE = process.env.BOT_TONE || "priateľský, stručný, vecný, jemne sarkastický";
+  const TONE = process.env.BOT_TONE || "priateľský, vtipný, stručný, jemne sarkastický";
   const STREAMER = process.env.STREAMER_NAME || "Sokrat";
   const GAME = gameQuery ? decodeURIComponent(String(gameQuery)) : (process.env.STREAM_GAME || "Twitch");
   const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
