@@ -83,20 +83,22 @@ export default async function handler(req, res) {
      try {
     // 💬 Automatická podpora GPT-4 aj GPT-5 modelov
     const payload = {
-      model: MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
-      ],
-      temperature
-    };
+  model: MODEL,
+  messages: [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: prompt || "Pozdrav chat a predstav sa jednou vetou." }
+  ]
+};
 
-    // 👉 GPT-5 (a novšie modely) používajú parameter max_completion_tokens
-    if (MODEL.startsWith("gpt-5")) {
-      payload.max_completion_tokens = 120;
-    } else {
-      payload.max_tokens = 120;
-    }
+// GPT-5 špecifiká
+if (MODEL.startsWith("gpt-5")) {
+  payload.max_completion_tokens = 120; // nový názov
+  // temperature sa neodosiela
+} else {
+  payload.max_tokens = 120;
+  payload.temperature = temperature;
+}
+
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
