@@ -164,7 +164,7 @@ if (!autoMode && TOPIC === "greeting") {
     };
 
     // krátky timeout stačí (Nightbot zvládne ±3s, ale držme to svižné)
-    const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 1500);
+    const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 2500);
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
@@ -238,7 +238,7 @@ if (!autoMode && TOPIC === "greeting") {
       { role: "system", content: systemForGreet },
       { role: "user", content: `Vytvor jednu krátku vetu na privítanie používateľa ${USER} v hre ${GAME}.` }
     ],
-    max_tokens: 80,
+    max_tokens: 60,
     temperature: 0.8 // viac kreativity
   };
 
