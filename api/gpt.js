@@ -217,16 +217,62 @@ if (!autoMode && TOPIC === "greeting") {
     ].join(" ");
   }
 
-  // --- rýchle odpovede (bez OpenAI) pre bežné dopyty (nie AUTO) ---
-  if (!autoMode && TOPIC === "greeting") {
-    const now = Date.now();
-    if (now - globalThis.__lastGreetAt < GREET_COOLDOWN_MS) {
-      return res.status(204).send(); // ticho – aby nespamoval
+  // --- greeting handler: vždy GPT generovanie ---
+if (!autoMode && TOPIC === "greeting") {
+  const now = Date.now();
+  if (now - globalThis.__lastGreetAt < GREET_COOLDOWN_MS) {
+    return res.status(204).send(); // ticho – nespamuj
+  }
+  globalThis.__lastGreetAt = now;
+
+  const systemForGreet = [
+    `Si Twitch chatbot na kanáli ${STREAMER}. Hra: ${GAME}. Jazyk: ${LANG}.`,
+    `ÚLOHA: Napíš jednu krátku, vtipnú a mierne troll hlášku na privítanie používateľa ${USER}.`,
+    `Buď priateľský, láskavý a bezpečný. Žiadne urážky ani NSFW. Max ${MAX_CHARS} znakov.`,
+    `Používaj ${TONE}.`
+  ].join(" ");
+
+  const payload = {
+    model: MODEL,
+    messages: [
+      { role: "system", content: systemForGreet },
+      { role: "user", content: `Vytvor jednu krátku vetu na privítanie používateľa ${USER} v hre ${GAME}.` }
+    ],
+    max_tokens: 80,
+    temperature: 0.8 // viac kreativity
+  };
+
+  const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 2000);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    }).finally(() => clearTimeout(t));
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const code = data?.error?.code || resp.status;
+      const msg = data?.error?.message || "Neznáma chyba OpenAI.";
+      return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
     }
-    globalThis.__lastGreetAt = now;
-    const msg = wittyGreeting(LANG, USER, GAME);
+
+    let text = data?.choices?.[0]?.message?.content?.trim() || "";
+    if (!text) text = "Ahoj, vitaj späť v chate! 😄";
+    return res.status(200).send(SAFE(text).slice(0, MAX_CHARS));
+  } catch {
+    // fallback ak GPT nestihne odpovedať
+    const msg = `Ahoj ${USER}, ${GAME} bez teba by nebol ono! 😏`;
     return res.status(200).send(SAFE(msg).slice(0, MAX_CHARS));
   }
+}
   if (!autoMode && TOPIC === "math") {
     const m = prompt.match(/(\d+)\s*([+\-*\/])\s*(\d+)/);
     if (m) {
