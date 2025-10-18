@@ -44,6 +44,7 @@ export default async function handler(req, res) {
   let urlObj = null;
   let langOverride = null;
   let gameQuery = null;
+  let userQuery = null;
   let autoMode = false;
   let chanceParam = null;
 
@@ -56,6 +57,7 @@ export default async function handler(req, res) {
     if (t && /^\d+$/.test(t)) timeoutOverride = Number(t);
     langOverride = sp.get("lang"); // sk|cz|en (voliteľné)
     gameQuery = sp.get("game");    // z Nightbota
+    userQuery = sp.get("user");    // z Nightbota
     autoMode = sp.get("auto") === "1";
     chanceParam = sp.get("chance");
   } catch (_) {}
@@ -114,6 +116,7 @@ export default async function handler(req, res) {
   const TONE = process.env.BOT_TONE || "priateľský, vtipný, stručný, jemne sarkastický";
   const STREAMER = process.env.STREAMER_NAME || "Sokrat";
   const GAME = gameQuery ? decodeURIComponent(String(gameQuery)) : (process.env.STREAM_GAME || "Twitch");
+  const USER = userQuery ? decodeURIComponent(String(userQuery)) : (req.query?.user ? decodeURIComponent(String(req.query.user)) : "kamoš");
   const SAFE = (s) => s.replace(/https?:\/\/\S+/gi, "[link]").replace(/(.+)\1{2,}/g, "$1");
 
   // Detekcia témy (pre rýchle odpovede mimo AUTO)
@@ -132,14 +135,53 @@ export default async function handler(req, res) {
   const baseTemp = Number(process.env.TEMPERATURE || 0.6);
   const temperature = (TOPIC === "science" || TOPIC === "game") ? 0.4 : (isQuestion ? 0.4 : baseTemp);
 
+  // ---- wity greeting pack + cooldown ----
+  const GREEETINGS = {
+    sk: [
+      "Ahoj {user}, zas späť — a aim si doniesol? 😏",
+      "Nazdar {user}! {game} bez teba je jak lobby bez toxíka. 😂",
+      "Čauko {user}, ideš rageovať alebo chillovať dnes? 😎",
+      "Servus {user}! Prišiel si po carry, však? 😉",
+      "{user}, vitaj. Zas nás ideš učiť, ako sa {game} *nehrá*? 🤣",
+      "Čau {user}! Konečne niekto normálny v chate 😎",
+      "Nazdar {user}, ready na meme run? 🤣",
+      "Ahoj {user}, dúfam, že mi neberieš miesto v tíme 😏"
+    ],
+    cz: [
+      "Čau {user}, zpátky v akci — a aim sis vzal? 😏",
+      "Nazdar {user}! {game} bez tebe je jak ranked bez lagů. 😂",
+      "Čauko {user}, jdeš dnes rage nebo chill? 😎",
+      "Zdar {user}! Přišel sis pro carry, co? 😉",
+      "{user}, vítej. Zase nás jdeš učit, jak se {game} *nehraje*? 🤣"
+    ],
+    en: [
+      "Hey {user}, back again — brought your aim this time? 😏",
+      "Yo {user}! {game} without you is like a lobby without salt. 😂",
+      "Sup {user}, rage or chill run today? 😎",
+      "Welcome {user}! Ready to get carried? 😉",
+      "{user}, here to show us how *not* to play {game}? 🤣"
+    ]
+  };
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  function wittyGreeting(lang, user, game) {
+    const arr = GREEETINGS[lang] || GREEETINGS.sk;
+    return pick(arr)
+      .replaceAll("{user}", user || "kamoš")
+      .replaceAll("{game}", game || "táto hra");
+  }
+
+  // jednoduchý anti-spam cooldown (1 odpoveď / 45s, nastaviteľné env premennou)
+  globalThis.__lastGreetAt ??= 0;
+  const GREET_COOLDOWN_MS = Number(process.env.GREET_COOLDOWN_MS || 45000);
+
   // Systémový prompt (default)
   const systemPrompt = [
     `Si Twitch chatbot na kanáli ${STREAMER}.`,
     `Aktuálna hra: ${GAME}. Hovor jazykom: ${LANG}. Používaj ${TONE}. Max ${MAX_CHARS} znakov.`,
+    "Buď vtipný a mierne troll, ale vždy láskavý a bezpečný; žiadne urážky ani NSFW.",
     "Odpovedaj jasne a priamo (1–2 vety).",
     "Ak otázka nedáva zmysel, odpovedz neutrálne a krátko.",
-    "Pri vede/hrach buď faktický a stručný.",
-    "Nezačínaj ospravedlnením, vyhni sa 'neviem čo myslíš'."
+    "Pri vede/hrach buď faktický a stručný."
   ].join(" ");
 
   // --- AUTO-NUDGE: náhodný skip a špeciálna persona ---
@@ -153,14 +195,20 @@ export default async function handler(req, res) {
       `Si Twitch chatbot na kanáli ${STREAMER}. Aktuálna hra: ${GAME}. Hovor jazykom: ${LANG}.`,
       `ÚLOHA: Zváž, či napísať JEDNU krátku a relevantnú vetu do chatu.`,
       `Ak nič zmysluplné nenapadne, odpovedz PRESNE: SKIP`,
-      `Ak niečo povieš, buď priateľský a k veci, max ${MAX_CHARS} znakov, žiadne @mentions.`,
+      `Ak niečo povieš, buď priateľský, vtipný a jemne troll, max ${MAX_CHARS} znakov, žiadne @mentions.`,
       `Nepíš otázky nasilu. Buď prirodzený.`
     ].join(" ");
   }
 
   // --- rýchle odpovede (bez OpenAI) pre bežné dopyty (nie AUTO) ---
   if (!autoMode && TOPIC === "greeting") {
-    return res.status(200).send(LANG === "en" ? "Hi! How are you? 😊" : (LANG === "cz" ? "Ahoj! Jak se máš? 😊" : "Ahoj! Ako sa máš? 😊"));
+    const now = Date.now();
+    if (now - globalThis.__lastGreetAt < GREET_COOLDOWN_MS) {
+      return res.status(204).send(); // ticho – aby nespamoval
+    }
+    globalThis.__lastGreetAt = now;
+    const msg = wittyGreeting(LANG, USER, GAME);
+    return res.status(200).send(SAFE(msg).slice(0, MAX_CHARS));
   }
   if (!autoMode && TOPIC === "math") {
     const m = prompt.match(/(\d+)\s*([+\-*\/])\s*(\d+)/);
@@ -181,7 +229,7 @@ export default async function handler(req, res) {
   try {
     // --- payload pre GPT-4 (klasické parametre) ---
     const userContent = autoMode
-      ? `Vygeneruj nenútený krátky nudge podľa hry "${GAME}". Ak nič zmysluplné, odpovedz SKIP.`
+      ? `Vygeneruj nenútený, krátky a vtipný nudge podľa hry "${GAME}". Ak nič zmysluplné, odpovedz SKIP.`
       : (prompt || "Pozdrav chat a predstav sa jednou vetou.");
 
     const payload = {
@@ -190,7 +238,7 @@ export default async function handler(req, res) {
         { role: "system", content: systemForUse },
         { role: "user", content: userContent }
       ],
-      max_tokens: autoMode ? 120 : 140, // auto-nudge ešte kratšie a rýchle
+      max_tokens: autoMode ? 120 : 140, // auto-nudge kratšie a rýchle
       temperature
     };
 
