@@ -135,54 +135,71 @@ export default async function handler(req, res) {
   const baseTemp = Number(process.env.TEMPERATURE || 0.6);
   const temperature = (TOPIC === "science" || TOPIC === "game") ? 0.4 : (isQuestion ? 0.4 : baseTemp);
 
-  // ---- wity greeting pack + cooldown ----
-  const GREEETINGS = {
-    sk: [
-      "Ahoj {user}, zas späť — a aim si doniesol? 😏",
-      "Nazdar {user}! {game} bez teba je jak lobby bez toxíka. 😂",
-      "Čauko {user}, ideš rageovať alebo chillovať dnes? 😎",
-      "Servus {user}! Prišiel si po carry, však? 😉",
-      "{user}, vitaj. Zas nás ideš učiť, ako sa {game} *nehrá*? 🤣",
-      "Čau {user}! Konečne niekto normálny v chate 😎",
-      "Nazdar {user}, ready na meme run? 🤣",
-      "Ahoj {user}, dúfam, že mi neberieš miesto v tíme 😏"
-    ],
-    cz: [
-      "Čau {user}, zpátky v akci — a aim sis vzal? 😏",
-      "Nazdar {user}! {game} bez tebe je jak ranked bez lagů. 😂",
-      "Čauko {user}, jdeš dnes rage nebo chill? 😎",
-      "Zdar {user}! Přišel sis pro carry, co? 😉",
-      "{user}, vítej. Zase nás jdeš učit, jak se {game} *nehraje*? 🤣"
-    ],
-    en: [
-      "Hey {user}, back again — brought your aim this time? 😏",
-      "Yo {user}! {game} without you is like a lobby without salt. 😂",
-      "Sup {user}, rage or chill run today? 😎",
-      "Welcome {user}! Ready to get carried? 😉",
-      "{user}, here to show us how *not* to play {game}? 🤣"
-    ]
-  };
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-  function wittyGreeting(lang, user, game) {
-    const arr = GREEETINGS[lang] || GREEETINGS.sk;
-    return pick(arr)
-      .replaceAll("{user}", user || "kamoš")
-      .replaceAll("{game}", game || "táto hra");
+  // --- greeting handler (s prepínačom gptgreet) ---
+const gptGreet = urlObj?.searchParams.get("gptgreet") === "1";
+if (!autoMode && TOPIC === "greeting") {
+  const now = Date.now();
+  if (now - globalThis.__lastGreetAt < GREET_COOLDOWN_MS) {
+    return res.status(204).send(); // ticho – nespamuj
+  }
+  globalThis.__lastGreetAt = now;
+
+  // Ak chceš vynútiť GPT greeting:
+  if (gptGreet) {
+    // Malý, rýchly prompt priamo pre greeting
+    const systemForGreet = [
+      `Si Twitch chatbot na kanáli ${STREAMER}. Hra: ${GAME}. Jazyk: ${LANG}.`,
+      `ÚLOHA: Napíš jednu krátku, vtipnú a mierne troll hlášku na privítanie používateľa ${USER}.`,
+      `Buď láskavý a bezpečný, žiadne urážky ani NSFW. Max ${MAX_CHARS} znakov.`
+    ].join(" ");
+
+    const payload = {
+      model: MODEL,
+      messages: [
+        { role: "system", content: systemForGreet },
+        { role: "user", content: `Vytvor 1 vetu. Meno: ${USER}. Hra: ${GAME}.` }
+      ],
+      max_tokens: 60,
+      temperature
+    };
+
+    // krátky timeout stačí (Nightbot zvládne ±3s, ale držme to svižné)
+    const TIMEOUT_MS = Number(timeoutOverride ?? process.env.TIMEOUT_MS ?? 1500);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+
+    try {
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal
+      }).finally(() => clearTimeout(t));
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const code = data?.error?.code || resp.status;
+        const msg  = data?.error?.message || "Neznáma chyba OpenAI.";
+        return res.status(500).send(`🤖 Chyba pri generovaní (${code}): ${msg}`);
+      }
+
+      let text = data?.choices?.[0]?.message?.content?.trim() || "";
+      if (!text) text = wittyGreeting(LANG, USER, GAME); // záloha
+      return res.status(200).send(SAFE(text).slice(0, MAX_CHARS));
+    } catch {
+      // pri chybe zober statickú hlášku
+      const msg = wittyGreeting(LANG, USER, GAME);
+      return res.status(200).send(SAFE(msg).slice(0, MAX_CHARS));
+    }
   }
 
-  // jednoduchý anti-spam cooldown (1 odpoveď / 45s, nastaviteľné env premennou)
-  globalThis.__lastGreetAt ??= 0;
-  const GREET_COOLDOWN_MS = Number(process.env.GREET_COOLDOWN_MS || 45000);
-
-  // Systémový prompt (default)
-  const systemPrompt = [
-    `Si Twitch chatbot na kanáli ${STREAMER}.`,
-    `Aktuálna hra: ${GAME}. Hovor jazykom: ${LANG}. Používaj ${TONE}. Max ${MAX_CHARS} znakov.`,
-    "Buď vtipný a mierne troll, ale vždy láskavý a bezpečný; žiadne urážky ani NSFW.",
-    "Odpovedaj jasne a priamo (1–2 vety).",
-    "Ak otázka nedáva zmysel, odpovedz neutrálne a krátko.",
-    "Pri vede/hrach buď faktický a stručný."
-  ].join(" ");
+  // Default: rýchly statický výber (bez GPT)
+  const msg = wittyGreeting(LANG, USER, GAME);
+  return res.status(200).send(SAFE(msg).slice(0, MAX_CHARS));
+}
 
   // --- AUTO-NUDGE: náhodný skip a špeciálna persona ---
   const CHANCE = Number.isFinite(Number(chanceParam)) ? Math.min(1, Math.max(0, Number(chanceParam))) : 0.6;
