@@ -16,7 +16,7 @@ export default async function handler(req, res) {
       if (qKeys.length === 1 && (q[qKeys[0]] === "" || typeof q[qKeys[0]] === "undefined")) {
         return qKeys[0];
       }
-
+      
       // c) fallback – manuálne cez URL
       try {
         const u = new URL(req.url, `http://${req.headers.host || "localhost"}`);
